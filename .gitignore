@@ -1,0 +1,29 @@
+# Terraform: never commit state, plans, or real variable values
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+tfplan
+crash.log
+*.tfvars
+!*.tfvars.example
+.terraform.lock.hcl.bak
+
+# PHP / Composer
+app/vendor/
+.phpunit.result.cache
+.phpunit.cache/
+
+# Script logs
+logs/
+
+# Local env and secrets
+.env
+*.json.key
+credentials*.json
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
