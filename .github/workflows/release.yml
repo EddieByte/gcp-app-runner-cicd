@@ -21,7 +21,7 @@
 #
 # Supply chain: every action is pinned to a full commit SHA (a tag can be
 # moved to malicious code; a SHA can't), with the version in a comment.
-# Dependabot proposes upgrades as PRs. Runners use an explicit OS version
+# Upgrades are done deliberately by bumping the SHA. Runners use an explicit OS version
 # (ubuntu-24.04) so a label migration can't change the build silently.
 # =============================================================================
 name: release

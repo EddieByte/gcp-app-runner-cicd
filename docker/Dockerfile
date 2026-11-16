@@ -22,7 +22,7 @@ FROM php:8.3-fpm-alpine AS runtime
 
 # `apk upgrade` pulls OS security patches released since the base image was
 # published; every CI build therefore gets the latest fixes. Base image tags
-# are kept current by Dependabot (.github/dependabot.yml) and every image is
+# are updated deliberately in this file, and every image is
 # scanned by Trivy before it can be pushed or deployed.
 # nginx + supervisor from Alpine; pdo_mysql + opcache compiled into PHP.
 RUN apk upgrade --no-cache \
