@@ -4,3 +4,6 @@ region     = "europe-west1"
 
 # Set true to keep previous state versions (recommended beyond a test setup).
 enable_state_versioning = false
+
+# CI/CD (Workload Identity Federation)
+github_repository = "EddieByte/gcp-app-runner-cicd"
