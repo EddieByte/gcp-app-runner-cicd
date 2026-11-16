@@ -19,9 +19,10 @@
 #   deploy job -> <env>-deploy SA      (dev tags can't get prod rights)
 # Docs: https://github.com/google-github-actions/auth#workload-identity-federation
 #
-# Supply chain: third-party actions are referenced by version tag for
-# readability; Dependabot keeps them current. For production, pin each action
-# to a full commit SHA.
+# Supply chain: every action is pinned to a full commit SHA (a tag can be
+# moved to malicious code; a SHA can't), with the version in a comment.
+# Dependabot proposes upgrades as PRs. Runners use an explicit OS version
+# (ubuntu-24.04) so a label migration can't change the build silently.
 # =============================================================================
 name: release
 
@@ -54,13 +55,13 @@ jobs:
   # ---------------------------------------------------------------------------
   guard:
     name: Resolve environment
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       environment: ${{ steps.resolve.outputs.environment }}
       version: ${{ github.ref_name }}
     steps:
       - name: Check out (full history, to verify branch ancestry)
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
@@ -93,7 +94,7 @@ jobs:
   test:
     name: PHP tests
     needs: guard
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     services:
       mysql:
         image: mysql:8.0
@@ -110,10 +111,10 @@ jobs:
       run:
         working-directory: app
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up PHP 8.3 (same version as the image)
-        uses: shivammathur/setup-php@v2
+        uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
         with:
           php-version: "8.3"
           extensions: pdo_mysql
@@ -142,7 +143,7 @@ jobs:
   build:
     name: Build, scan, push
     needs: [guard, test]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       id-token: write          # OIDC token for Workload Identity Federation
@@ -150,7 +151,7 @@ jobs:
     outputs:
       digest: ${{ steps.push.outputs.digest }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Build image
         run: |
@@ -220,7 +221,7 @@ jobs:
 
       - name: Upload Trivy reports as a build artifact
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: trivy-report-${{ github.ref_name }}
           path: |
@@ -242,7 +243,7 @@ jobs:
 
       - name: Upload Trivy results
         if: always()
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
         with:
           sarif_file: trivy-image.sarif
           category: trivy-image
@@ -255,12 +256,12 @@ jobs:
           format: table
 
       - name: Authenticate to Google Cloud as the builder (keyless)
-        uses: google-github-actions/auth@v2
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
           workload_identity_provider: ${{ vars.WIF_PROVIDER }}
           service_account: ${{ vars.BUILDER_SA }}   # can push images, nothing else
 
-      - uses: google-github-actions/setup-gcloud@v2
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
 
       - name: Push image
         id: push
@@ -282,7 +283,7 @@ jobs:
   deploy:
     name: Deploy to ${{ needs.guard.outputs.environment }}
     needs: [guard, build]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     environment:
       name: ${{ needs.guard.outputs.environment }}
       url: ${{ steps.deploy.outputs.url }}
@@ -295,17 +296,17 @@ jobs:
       STATIC_BUCKET: ${{ vars.STATIC_BUCKET }}
       APP_URL: ${{ vars.APP_URL }}             # load balancer URL
     steps:
-      - uses: actions/checkout@v4   # for app/public/static
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Authenticate to Google Cloud as this environment's deployer (keyless)
-        uses: google-github-actions/auth@v2
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
           workload_identity_provider: ${{ vars.WIF_PROVIDER }}
           # Environment-level variable: dev and prod have different deployers,
           # and GCP only lets each one be used by its own tag channel.
           service_account: ${{ vars.DEPLOYER_SA }}
 
-      - uses: google-github-actions/setup-gcloud@v2
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
 
       - name: Remember current revision (rollback target)
         id: previous
