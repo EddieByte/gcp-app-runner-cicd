@@ -1,0 +1,6 @@
+# Copy to terraform.tfvars (git-ignored) and adjust per environment.
+project_id             = "php-cloudrun-platform"
+region                 = "europe-west1"
+environment            = "dev"
+app_name               = "php-app"
+artifact_repository_id = "php-app"
