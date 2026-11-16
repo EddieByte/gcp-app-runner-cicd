@@ -12,3 +12,23 @@ variable "name_prefix" {
     error_message = "name_prefix must be <= 23 chars so '<prefix>-deploy' fits the 30-char SA ID limit."
   }
 }
+
+variable "wif_pool_name" {
+  description = "Full Workload Identity Pool name (projects/<num>/locations/global/workloadIdentityPools/<id>)."
+  type        = string
+}
+
+variable "github_repository" {
+  description = "GitHub repo (owner/name) allowed to deploy."
+  type        = string
+}
+
+variable "release_channel" {
+  description = "WIF channel this deployer accepts: dev (dev-vX.Y.Z tags) or prod (vX.Y.Z tags)."
+  type        = string
+
+  validation {
+    condition     = contains(["dev", "prod"], var.release_channel)
+    error_message = "release_channel must be dev or prod."
+  }
+}

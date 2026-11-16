@@ -41,11 +41,11 @@ resource "google_project_iam_member" "runtime" {
   member  = "serviceAccount:${google_service_account.runtime.email}"
 }
 
-# Project-level roles for the deployer SA.
+# Project-level roles for the deployer SA. It only deploys; pushing images is
+# the separate ci-builder SA's job (see terraform/bootstrap/ci.tf).
 resource "google_project_iam_member" "deployer" {
   for_each = toset([
-    "roles/run.admin",               # create/update Cloud Run revisions
-    "roles/artifactregistry.writer", # push images
+    "roles/run.admin", # create/update Cloud Run revisions, shift traffic (rollback)
   ])
 
   project = var.project_id
@@ -60,4 +60,14 @@ resource "google_service_account_iam_member" "deployer_act_as_runtime" {
   service_account_id = google_service_account.runtime.name
   role               = "roles/iam.serviceAccountUser"
   member             = "serviceAccount:${google_service_account.deployer.email}"
+}
+
+# Let GitHub Actions impersonate this deployer, but ONLY for this environment's
+# release channel (e.g. dev deployer <- dev-vX.Y.Z tags; prod <- vX.Y.Z tags).
+# A dev tag can therefore never obtain prod deploy rights.
+# Docs: https://cloud.google.com/iam/docs/workload-identity-federation-with-deployment-pipelines#grant-access
+resource "google_service_account_iam_member" "deployer_wif" {
+  service_account_id = google_service_account.deployer.name
+  role               = "roles/iam.workloadIdentityUser"
+  member             = "principalSet://iam.googleapis.com/${var.wif_pool_name}/attribute.channel/${var.github_repository}:${var.release_channel}"
 }
