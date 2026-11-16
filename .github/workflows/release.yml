@@ -1,0 +1,332 @@
+# =============================================================================
+# Release pipeline: TAG-DRIVEN ONLY.
+#
+# Nothing runs on ordinary pushes or merges. A deployment happens only when a
+# release tag is pushed, so every deploy is deliberate and traceable:
+#
+#   dev-vX.Y.Z  (tag on a commit in the `dev` branch)  -> dev  Cloud Run service
+#   vX.Y.Z      (tag on a commit in `main`)            -> prod Cloud Run service
+#                                                         (manual approval gate)
+#
+#   git checkout dev  && git tag dev-v1.2.0 && git push origin dev-v1.2.0
+#   git checkout main && git tag v1.2.0     && git push origin v1.2.0
+#
+# Stages: guard -> test + IaC scan -> build -> Trivy scan -> push -> deploy
+#         -> smoke test (automatic rollback on failure)
+#
+# Auth: Workload Identity Federation (OIDC). No service-account keys anywhere.
+#   build  job -> ci-builder SA        (push images only)
+#   deploy job -> <env>-deploy SA      (dev tags can't get prod rights)
+# Docs: https://github.com/google-github-actions/auth#workload-identity-federation
+#
+# Supply chain: third-party actions are referenced by version tag for
+# readability; Dependabot keeps them current. For production, pin each action
+# to a full commit SHA.
+# =============================================================================
+name: release
+
+on:
+  push:
+    tags:
+      - "dev-v[0-9]+.[0-9]+.[0-9]+"
+      - "v[0-9]+.[0-9]+.[0-9]+"
+
+# Never run two deployments to the same environment at once; don't cancel a
+# deploy halfway through.
+concurrency:
+  group: release-${{ startsWith(github.ref_name, 'dev-') && 'dev' || 'prod' }}
+  cancel-in-progress: false
+
+# Least privilege by default; jobs that need more ask for it explicitly.
+permissions:
+  contents: read
+
+env:
+  # Non-secret settings live in repository variables (Settings -> Variables).
+  PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+  REGION: ${{ vars.GCP_REGION }}
+  IMAGE: ${{ vars.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GAR_REPOSITORY }}/${{ vars.IMAGE_NAME }}
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # 1. Guard: work out the target environment and refuse tags on the wrong
+  #    branch (e.g. a prod tag on an unreviewed feature commit).
+  # ---------------------------------------------------------------------------
+  guard:
+    name: Resolve environment
+    runs-on: ubuntu-latest
+    outputs:
+      environment: ${{ steps.resolve.outputs.environment }}
+      version: ${{ github.ref_name }}
+    steps:
+      - name: Check out (full history, to verify branch ancestry)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Map tag to environment and verify source branch
+        id: resolve
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          if [[ "$TAG" == dev-v* ]]; then
+            ENVIRONMENT=dev;  BRANCH=dev
+          else
+            ENVIRONMENT=prod; BRANCH=main
+          fi
+
+          git fetch --no-tags origin "$BRANCH"
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" "origin/$BRANCH"; then
+            echo "::error::Tag $TAG points to a commit that is not on '$BRANCH'. Refusing to deploy."
+            exit 1
+          fi
+
+          echo "environment=$ENVIRONMENT" >> "$GITHUB_OUTPUT"
+          echo "### Release $TAG -> $ENVIRONMENT (from $BRANCH)" >> "$GITHUB_STEP_SUMMARY"
+
+  # ---------------------------------------------------------------------------
+  # 2a. PHP unit + integration tests against a real MySQL 8.0.
+  #     The test DB password comes from a GitHub secret, as the brief requires
+  #     for sensitive values. (The cloud DB password lives in Secret Manager
+  #     and never passes through GitHub.)
+  # ---------------------------------------------------------------------------
+  test:
+    name: PHP tests
+    needs: guard
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_DATABASE: app
+          MYSQL_USER: app
+          MYSQL_PASSWORD: ${{ secrets.CI_DB_PASSWORD }}
+          MYSQL_RANDOM_ROOT_PASSWORD: "yes"
+        ports: ["3306:3306"]
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1"
+          --health-interval=5s --health-timeout=5s --health-retries=20
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up PHP 8.3 (same version as the image)
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.3"
+          extensions: pdo_mysql
+          coverage: none
+
+      - name: Install dependencies
+        run: composer install --no-interaction --no-progress --prefer-dist
+
+      - name: Unit tests
+        run: vendor/bin/phpunit --testsuite unit
+
+      - name: Integration tests (real MySQL)
+        env:
+          DB_HOST: 127.0.0.1
+          DB_PORT: "3306"
+          DB_NAME: app
+          DB_USER: app
+          DB_PASS: ${{ secrets.CI_DB_PASSWORD }}
+        run: vendor/bin/phpunit --testsuite integration
+
+  # ---------------------------------------------------------------------------
+  # 2b. Infrastructure checks: Terraform formatting/validity and Trivy
+  #     misconfiguration scan of Terraform + Dockerfile.
+  # ---------------------------------------------------------------------------
+  iac:
+    name: IaC checks
+    needs: guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+
+      - name: terraform fmt
+        run: terraform fmt -check -recursive terraform
+
+      - name: terraform validate (no backend, no credentials needed)
+        run: |
+          for dir in terraform/bootstrap terraform/envs/dev; do
+            terraform -chdir="$dir" init -backend=false -input=false >/dev/null
+            terraform -chdir="$dir" validate
+          done
+
+      - name: Trivy misconfiguration scan (Terraform + Dockerfile)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: config
+          scan-ref: .
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+
+  # ---------------------------------------------------------------------------
+  # 3. Build -> Trivy scan -> push. The image is pushed ONLY if the scan
+  #    passes, so nothing vulnerable ever reaches the registry.
+  #    Tags are immutable in Artifact Registry: v1.2.0 always means this image.
+  # ---------------------------------------------------------------------------
+  build:
+    name: Build, scan, push
+    needs: [guard, test, iac]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write          # OIDC token for Workload Identity Federation
+      security-events: write   # upload Trivy SARIF to the Security tab
+    outputs:
+      digest: ${{ steps.push.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image
+        run: |
+          docker build \
+            -f docker/Dockerfile \
+            --label "org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}" \
+            --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
+            --label "org.opencontainers.image.version=${GITHUB_REF_NAME}" \
+            -t "${IMAGE}:${GITHUB_REF_NAME}" .
+
+      - name: Trivy image scan (report to Security tab)
+        if: always()
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ env.IMAGE }}:${{ github.ref_name }}
+          trivy-config: trivy.yaml
+          format: sarif
+          output: trivy-image.sarif
+          exit-code: "0"
+
+      - name: Upload Trivy results
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-image.sarif
+          category: trivy-image
+
+      - name: Trivy image scan (gate - fails on fixable HIGH/CRITICAL)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ env.IMAGE }}:${{ github.ref_name }}
+          trivy-config: trivy.yaml
+          format: table
+
+      - name: Authenticate to Google Cloud as the builder (keyless)
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+          service_account: ${{ vars.BUILDER_SA }}   # can push images, nothing else
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Push image
+        id: push
+        run: |
+          set -euo pipefail
+          gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
+          docker push "${IMAGE}:${GITHUB_REF_NAME}"
+          DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "${IMAGE}:${GITHUB_REF_NAME}" | cut -d@ -f2)
+          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+          echo "Pushed \`${IMAGE}@${DIGEST}\`" >> "$GITHUB_STEP_SUMMARY"
+
+  # ---------------------------------------------------------------------------
+  # 4. Deploy by DIGEST (not tag) so exactly the scanned bytes run.
+  #    `environment:` applies GitHub Environment rules: prod requires a
+  #    reviewer's approval before this job starts.
+  #    Only the image changes; env vars, secrets, SA, scaling and the Cloud SQL
+  #    connection stay as Terraform defined them.
+  # ---------------------------------------------------------------------------
+  deploy:
+    name: Deploy to ${{ needs.guard.outputs.environment }}
+    needs: [guard, build]
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ needs.guard.outputs.environment }}
+      url: ${{ steps.deploy.outputs.url }}
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      # Environment-level variables (differ between dev and prod)
+      SERVICE: ${{ vars.CLOUD_RUN_SERVICE }}
+      STATIC_BUCKET: ${{ vars.STATIC_BUCKET }}
+      APP_URL: ${{ vars.APP_URL }}             # load balancer URL
+    steps:
+      - uses: actions/checkout@v4   # for app/public/static
+
+      - name: Authenticate to Google Cloud as this environment's deployer (keyless)
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+          # Environment-level variable: dev and prod have different deployers,
+          # and GCP only lets each one be used by its own tag channel.
+          service_account: ${{ vars.DEPLOYER_SA }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Remember current revision (rollback target)
+        id: previous
+        run: |
+          PREV=$(gcloud run services describe "$SERVICE" --region "$REGION" \
+                 --format='value(status.latestReadyRevisionName)')
+          echo "revision=$PREV" >> "$GITHUB_OUTPUT"
+
+      # Static files first: the new revision's HTML may reference new assets.
+      # Old files are kept (no delete) so pages from the previous revision
+      # still load during the rollout.
+      - name: Sync static files to the bucket (served by the LB at /static/*)
+        run: |
+          gcloud storage rsync app/public/static "gs://${STATIC_BUCKET}/static" \
+            --recursive --cache-control="public, max-age=3600"
+
+      - name: Deploy new revision
+        id: deploy
+        run: |
+          set -euo pipefail
+          # Revision named after the release, e.g. php-app-dev-dev-v1-2-0,
+          # so the console shows exactly which release is serving.
+          gcloud run deploy "$SERVICE" \
+            --image "${IMAGE}@${{ needs.build.outputs.digest }}" \
+            --region "$REGION" \
+            --revision-suffix "${GITHUB_REF_NAME//./-}" \
+            --quiet
+          # If an earlier rollback pinned traffic to an old revision, new
+          # revisions get 0%. Always route to the newly deployed one.
+          gcloud run services update-traffic "$SERVICE" --region "$REGION" --to-latest --quiet
+          echo "url=${APP_URL}" >> "$GITHUB_OUTPUT"
+
+      # Through the load balancer, exactly as users reach it (the *.run.app URL
+      # is closed to the internet by the LB-only ingress setting).
+      - name: Smoke test (/healthz, /readyz, /static via LB)
+        run: |
+          set -euo pipefail
+          URL="${APP_URL}"
+          for path in /healthz /readyz /static/style.css; do
+            for attempt in 1 2 3 4 5; do
+              code=$(curl -s -o /dev/null -w '%{http_code}' "$URL$path" || true)
+              [[ "$code" == "200" ]] && { echo "$path OK"; continue 2; }
+              echo "$path returned $code (attempt $attempt), retrying..."; sleep 6
+            done
+            echo "::error::Smoke test failed on $path"; exit 1
+          done
+
+      - name: Roll back on failure
+        if: failure() && steps.previous.outputs.revision != ''
+        run: |
+          echo "::warning::Rolling back to ${{ steps.previous.outputs.revision }}"
+          gcloud run services update-traffic "$SERVICE" --region "$REGION" \
+            --to-revisions "${{ steps.previous.outputs.revision }}=100"
+
+      - name: Summary
+        run: |
+          {
+            echo "### Deployed ${GITHUB_REF_NAME} to ${{ needs.guard.outputs.environment }}"
+            echo "- Service: \`${SERVICE}\`"
+            echo "- Image: \`${IMAGE}@${{ needs.build.outputs.digest }}\`"
+            echo "- URL: ${APP_URL}"
+          } >> "$GITHUB_STEP_SUMMARY"

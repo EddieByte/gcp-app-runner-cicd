@@ -1,0 +1,81 @@
+# =============================================================================
+# Weekly re-scan of the images that are RUNNING in dev and prod.
+#
+# An image that was clean at build time can become vulnerable when a new CVE
+# is published (a "zero-day" becomes a known CVE). This job never builds or
+# deploys anything; it only scans and reports to the GitHub Security tab, and
+# fails (visible red X + email) if a fixable HIGH/CRITICAL issue appears.
+# Fix = cut a new release tag, which rebuilds with patched packages.
+# =============================================================================
+name: security-rescan
+
+on:
+  schedule:
+    - cron: "17 6 * * 1"   # Mondays 06:17 UTC (07:17 Lagos)
+  workflow_dispatch: {}     # manual "Run workflow" button
+
+permissions:
+  contents: read
+  id-token: write
+  security-events: write
+
+jobs:
+  rescan:
+    name: Rescan ${{ matrix.environment }}
+    runs-on: ubuntu-latest
+    # No `environment:` here on purpose: prod's approval gate would block an
+    # unattended scan. The scanner identity is read-only, so no gate is needed.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - environment: dev
+            service: ${{ vars.CLOUD_RUN_SERVICE_DEV }}
+          - environment: prod
+            service: ${{ vars.CLOUD_RUN_SERVICE_PROD }}
+    steps:
+      - uses: actions/checkout@v4   # for trivy.yaml / .trivyignore
+
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+          service_account: ${{ vars.SCANNER_SA }}   # read-only identity
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Find the image currently serving traffic
+        id: image
+        run: |
+          IMAGE=$(gcloud run services describe "${{ matrix.service }}" \
+                  --region "${{ vars.GCP_REGION }}" \
+                  --format='value(spec.template.spec.containers[0].image)' || true)
+          if [[ -z "$IMAGE" ]]; then
+            echo "No service deployed in ${{ matrix.environment }}; skipping."
+          fi
+          echo "ref=$IMAGE" >> "$GITHUB_OUTPUT"
+          gcloud auth configure-docker "${{ vars.GCP_REGION }}-docker.pkg.dev" --quiet
+
+      - name: Trivy scan (report)
+        if: steps.image.outputs.ref != ''
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ steps.image.outputs.ref }}
+          trivy-config: trivy.yaml
+          format: sarif
+          output: trivy-rescan.sarif
+          exit-code: "0"
+
+      - name: Upload results
+        if: steps.image.outputs.ref != ''
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-rescan.sarif
+          category: trivy-rescan-${{ matrix.environment }}
+
+      - name: Trivy scan (fail on fixable HIGH/CRITICAL)
+        if: steps.image.outputs.ref != ''
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ steps.image.outputs.ref }}
+          trivy-config: trivy.yaml
+          format: table
