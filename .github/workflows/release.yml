@@ -222,7 +222,7 @@ jobs:
           workload_identity_provider: ${{ vars.WIF_PROVIDER }}
           service_account: ${{ vars.BUILDER_SA }}   # can push images, nothing else
 
-      - uses: google-github-actions/setup-gcloud@v2
+      - uses: google-github-actions/setup-gcloud@v3
 
       - name: Push image
         id: push
@@ -267,7 +267,7 @@ jobs:
           # and GCP only lets each one be used by its own tag channel.
           service_account: ${{ vars.DEPLOYER_SA }}
 
-      - uses: google-github-actions/setup-gcloud@v2
+      - uses: google-github-actions/setup-gcloud@v3
 
       - name: Remember current revision (rollback target)
         id: previous
