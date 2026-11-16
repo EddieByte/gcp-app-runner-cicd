@@ -1,0 +1,5 @@
+# Accepted risks. One CVE per line, ALWAYS with a reason, owner and expiry date.
+# Expired entries are reviewed in the weekly rescan job.
+#
+# Example:
+# CVE-2024-00000  # not reachable: app never parses XML; owner: eddie; expires: 2027-01-31

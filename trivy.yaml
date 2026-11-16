@@ -1,0 +1,19 @@
+# -----------------------------------------------------------------------------
+# Trivy settings shared by local runs and CI.
+# Docs: https://trivy.dev/latest/docs/references/configuration/config-file/
+#
+# Policy: block on HIGH and CRITICAL vulnerabilities that HAVE a fix available.
+# Unfixed CVEs can't be patched by us, so they're reported (SARIF in the
+# GitHub Security tab) but don't block; the weekly rescan re-checks them.
+# -----------------------------------------------------------------------------
+severity:
+  - HIGH
+  - CRITICAL
+exit-code: 1
+scan:
+  scanners:
+    - vuln
+    - secret
+vulnerability:
+  ignore-unfixed: true
+ignorefile: .trivyignore
