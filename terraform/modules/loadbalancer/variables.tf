@@ -46,3 +46,9 @@ variable "labels" {
   type    = map(string)
   default = {}
 }
+
+variable "redirect_http_to_https" {
+  description = "301-redirect port 80 to HTTPS. Enable only after the managed certificate is ACTIVE."
+  type        = bool
+  default     = false
+}

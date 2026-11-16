@@ -84,3 +84,9 @@ variable "enable_https" {
   type        = bool
   default     = false
 }
+
+variable "redirect_http_to_https" {
+  description = "Redirect :80 to HTTPS. Turn on only after the certificate is ACTIVE."
+  type        = bool
+  default     = false
+}

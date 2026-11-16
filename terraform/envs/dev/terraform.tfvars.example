@@ -15,4 +15,5 @@ db_deletion_protection = false
 # Cloud Run / load balancer
 min_instances = 0
 max_instances = 3
-enable_https  = false   # true = managed cert on <ip>.nip.io (+1 forwarding rule)
+enable_https           = false # true = managed cert on <ip>.nip.io (+1 forwarding rule)
+redirect_http_to_https = false # flip to true only once the cert is ACTIVE

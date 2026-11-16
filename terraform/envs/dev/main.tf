@@ -112,5 +112,6 @@ module "loadbalancer" {
   cloud_run_service_name = module.cloudrun.service_name
   static_bucket_name     = module.static_bucket.bucket_name
   enable_https           = var.enable_https
+  redirect_http_to_https = var.redirect_http_to_https
   labels                 = local.labels
 }

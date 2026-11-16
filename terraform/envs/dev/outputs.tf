@@ -30,7 +30,7 @@ output "github_environment_vars" {
     DEPLOYER_SA       = module.iam.deployer_sa_email
     CLOUD_RUN_SERVICE = module.cloudrun.service_name
     STATIC_BUCKET     = module.static_bucket.bucket_name
-    APP_URL           = module.loadbalancer.http_url
+    APP_URL           = coalesce(module.loadbalancer.https_url, module.loadbalancer.http_url)
   }
 }
 
@@ -53,4 +53,8 @@ output "cloud_run_service" {
 
 output "static_bucket" {
   value = module.static_bucket.bucket_name
+}
+
+output "certificate_name" {
+  value = module.loadbalancer.certificate_name
 }

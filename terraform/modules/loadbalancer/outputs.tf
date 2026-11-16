@@ -15,3 +15,12 @@ output "http_url" {
 output "https_url" {
   value = var.enable_https ? "https://${local.domain}" : null
 }
+
+output "https_domain" {
+  value = var.enable_https ? local.domain : null
+}
+
+output "certificate_name" {
+  description = "Check status: gcloud compute ssl-certificates describe <name> --global"
+  value       = var.enable_https ? google_compute_managed_ssl_certificate.this[0].name : null
+}

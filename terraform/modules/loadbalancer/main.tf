@@ -78,10 +78,30 @@ resource "google_compute_url_map" "this" {
 }
 
 # --- HTTP (always on) ---------------------------------------------------------
+# Port 80 either serves the app directly or, once HTTPS is live and
+# redirect_http_to_https = true, answers every request with a 301 to https://.
+# Keep the redirect OFF until the certificate shows ACTIVE, or the site goes
+# dark while the cert is still provisioning.
+locals {
+  http_redirect = var.enable_https && var.redirect_http_to_https
+}
+
+resource "google_compute_url_map" "http_redirect" {
+  count   = local.http_redirect ? 1 : 0
+  project = var.project_id
+  name    = "${var.name_prefix}-http-redirect"
+
+  default_url_redirect {
+    https_redirect         = true
+    redirect_response_code = "MOVED_PERMANENTLY_DEFAULT" # 301
+    strip_query            = false
+  }
+}
+
 resource "google_compute_target_http_proxy" "this" {
   project = var.project_id
   name    = "${var.name_prefix}-http-proxy"
-  url_map = google_compute_url_map.this.id
+  url_map = local.http_redirect ? google_compute_url_map.http_redirect[0].id : google_compute_url_map.this.id
 }
 
 resource "google_compute_global_forwarding_rule" "http" {
