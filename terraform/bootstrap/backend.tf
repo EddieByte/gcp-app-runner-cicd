@@ -11,8 +11,8 @@
 # -----------------------------------------------------------------------------
 
 terraform {
-   backend "gcs" {
+  backend "gcs" {
     bucket = "php-cloudrun-platform-tfstate"
-     prefix = "bootstrap"
+    prefix = "bootstrap"
   }
- }
+}
