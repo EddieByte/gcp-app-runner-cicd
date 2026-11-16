@@ -128,7 +128,7 @@ resource "google_cloud_run_v2_service" "this" {
       template[0].containers[0].image, # owned by CI (release tags)
       template[0].revision,            # CI names revisions after the release tag
       client,                          # set by gcloud on each deploy
-      client_version,
+      client_version,                  # set by gcloud on each deploy
       traffic,                         # CI may pin traffic during a rollback
     ]
   }
