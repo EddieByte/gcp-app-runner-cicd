@@ -158,7 +158,7 @@ jobs:
           done
 
       - name: Trivy misconfiguration scan (Terraform + Dockerfile)
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: config
           scan-ref: .
@@ -194,7 +194,7 @@ jobs:
 
       - name: Trivy image scan (report to Security tab)
         if: always()
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: ${{ env.IMAGE }}:${{ github.ref_name }}
           trivy-config: trivy.yaml
@@ -210,7 +210,7 @@ jobs:
           category: trivy-image
 
       - name: Trivy image scan (gate - fails on fixable HIGH/CRITICAL)
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: ${{ env.IMAGE }}:${{ github.ref_name }}
           trivy-config: trivy.yaml
