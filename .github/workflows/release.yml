@@ -161,6 +161,75 @@ jobs:
             --label "org.opencontainers.image.version=${GITHUB_REF_NAME}" \
             -t "${IMAGE}:${GITHUB_REF_NAME}" .
 
+      # --- Reports (informational, never block) ---------------------------
+      # Full picture: ALL severities, fixed or not, so the run shows what is
+      # in the image, not just what blocks it.
+      - name: Trivy full report (JSON, all severities)
+        if: always()
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0 (pinned to commit SHA)
+        with:
+          image-ref: ${{ env.IMAGE }}:${{ github.ref_name }}
+          scanners: vuln,secret
+          severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
+          ignore-unfixed: false
+          format: json
+          output: trivy-report.json
+          exit-code: "0"
+
+      - name: Trivy full report (table, all severities)
+        if: always()
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0 (pinned to commit SHA)
+        with:
+          image-ref: ${{ env.IMAGE }}:${{ github.ref_name }}
+          scanners: vuln,secret
+          severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
+          ignore-unfixed: false
+          format: table
+          output: trivy-report.txt
+          exit-code: "0"
+
+      # Severity table + full report on the run's Summary page.
+      - name: Publish Trivy summary
+        if: always()
+        run: |
+          J=trivy-report.json
+          [[ -f "$J" ]] || { echo "No Trivy report produced." >> "$GITHUB_STEP_SUMMARY"; exit 0; }
+          count() { jq --arg s "$1" '[.Results[]?.Vulnerabilities[]? | select(.Severity==$s)] | length' "$J"; }
+          fixable() { jq --arg s "$1" '[.Results[]?.Vulnerabilities[]? | select(.Severity==$s and ((.FixedVersion // "") != ""))] | length' "$J"; }
+          secrets=$(jq '[.Results[]?.Secrets[]?] | length' "$J")
+          {
+            echo "## Trivy image scan: \`${IMAGE}:${GITHUB_REF_NAME}\`"
+            echo
+            echo "| Severity | Found | Fix available | Blocks the release? |"
+            echo "|---|---:|---:|---|"
+            for s in CRITICAL HIGH MEDIUM LOW UNKNOWN; do
+              case $s in CRITICAL|HIGH) b="yes, if a fix exists";; *) b="no (reported only)";; esac
+              echo "| $s | $(count $s) | $(fixable $s) | $b |"
+            done
+            echo "| Secrets | $secrets | n/a | yes |"
+            echo
+            echo "Policy: \`trivy.yaml\` (fixable HIGH/CRITICAL and secrets block). Accepted risks: \`.trivyignore\`."
+            echo
+            echo "<details><summary>Full Trivy report</summary>"
+            echo
+            echo '```'
+            head -c 900000 trivy-report.txt
+            echo '```'
+            echo "</details>"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload Trivy reports as a build artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-report-${{ github.ref_name }}
+          path: |
+            trivy-report.json
+            trivy-report.txt
+            trivy-image.sarif
+          retention-days: 30
+          if-no-files-found: ignore
+
       - name: Trivy image scan (report to Security tab)
         if: always()
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0 (pinned to commit SHA)
