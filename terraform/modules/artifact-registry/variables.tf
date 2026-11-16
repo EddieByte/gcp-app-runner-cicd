@@ -23,3 +23,9 @@ variable "retention_days" {
   type        = number
   default     = 30
 }
+
+variable "immutable_tags" {
+  description = "Prevent existing tags from being overwritten (tag-based deployments rely on this)."
+  type        = bool
+  default     = true
+}

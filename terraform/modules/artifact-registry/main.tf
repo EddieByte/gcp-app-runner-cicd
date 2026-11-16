@@ -15,6 +15,13 @@ resource "google_artifact_registry_repository" "this" {
   format        = "DOCKER"
   description   = "Container images for ${var.repository_id}"
 
+  # Immutable tags: once v1.2.0 (or sha-abc123) is pushed it can never be
+  # overwritten, so a tag always means the exact image that was scanned and
+  # tested. Adding a NEW tag to an existing image (promotion) is still allowed.
+  docker_config {
+    immutable_tags = var.immutable_tags
+  }
+
   # Cleanup policies keep storage costs down: keep the N most recent images
   # (for rollback), delete anything else older than the retention period.
   cleanup_policy_dry_run = false
