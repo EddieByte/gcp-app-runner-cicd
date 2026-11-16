@@ -8,17 +8,17 @@
 # Docs: https://cloud.google.com/service-usage/docs/enable-disable
 locals {
   apis = [
-    "storage.googleapis.com",           # Cloud Storage (state + static files)
-    "iam.googleapis.com",               # service accounts, IAM bindings
-    "iamcredentials.googleapis.com",    # short-lived tokens (Workload Identity Federation)
-    "sts.googleapis.com",               # token exchange (Workload Identity Federation)
+    "storage.googleapis.com",        # Cloud Storage (state + static files)
+    "iam.googleapis.com",            # service accounts, IAM bindings
+    "iamcredentials.googleapis.com", # short-lived tokens (Workload Identity Federation)
+    "sts.googleapis.com",            # token exchange (Workload Identity Federation)
     "cloudresourcemanager.googleapis.com",
-    "run.googleapis.com",               # Cloud Run
-    "sqladmin.googleapis.com",          # Cloud SQL Admin (also used by the Cloud SQL connector)
-    "compute.googleapis.com",           # load balancer, IP addresses, NEGs
-    "artifactregistry.googleapis.com",  # container images
-    "secretmanager.googleapis.com",     # DB password
-    "cloudbuild.googleapis.com",        # optional image builds
+    "run.googleapis.com",              # Cloud Run
+    "sqladmin.googleapis.com",         # Cloud SQL Admin (also used by the Cloud SQL connector)
+    "compute.googleapis.com",          # load balancer, IP addresses, NEGs
+    "artifactregistry.googleapis.com", # container images
+    "secretmanager.googleapis.com",    # DB password
+    "cloudbuild.googleapis.com",       # optional image builds
   ]
 }
 
@@ -40,17 +40,23 @@ resource "google_storage_bucket" "tfstate" {
   public_access_prevention    = "enforced" # state can contain secrets
 
   # Versioning lets us recover a corrupted or overwritten state file.
+  # Disabled for now (var.enable_state_versioning = false) to keep the test
+  # setup minimal; recommended ON for any shared or production environment.
   versioning {
-    enabled = true
+    enabled = var.enable_state_versioning
   }
 
   # Keep state history bounded: drop non-current versions after 30 days.
-  lifecycle_rule {
-    condition {
-      days_since_noncurrent_time = 30
-    }
-    action {
-      type = "Delete"
+  # Only created when versioning is on (no non-current versions otherwise).
+  dynamic "lifecycle_rule" {
+    for_each = var.enable_state_versioning ? [1] : []
+    content {
+      condition {
+        days_since_noncurrent_time = 30
+      }
+      action {
+        type = "Delete"
+      }
     }
   }
 

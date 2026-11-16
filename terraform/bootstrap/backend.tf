@@ -10,9 +10,9 @@
 # Docs: https://developer.hashicorp.com/terraform/language/backend/gcs
 # -----------------------------------------------------------------------------
 
-# terraform {
-#   backend "gcs" {
-#     bucket = "php-cloudrun-platform-tfstate"
-#     prefix = "bootstrap"
-#   }
-# }
+terraform {
+   backend "gcs" {
+    bucket = "php-cloudrun-platform-tfstate"
+     prefix = "bootstrap"
+  }
+ }
