@@ -1,0 +1,32 @@
+# Local development: the same image as Cloud Run, plus MySQL 8.0.
+#   docker compose up --build    ->  http://localhost:8080
+# The app uses DB_HOST (TCP) locally instead of the Cloud SQL socket.
+services:
+  app:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      APP_NAME: php-app
+      APP_ENV: local
+      DB_HOST: db
+      DB_NAME: app
+      DB_USER: app
+      DB_PASS: localpass   # local only; in the cloud this comes from Secret Manager
+    depends_on:
+      db:
+        condition: service_healthy
+
+  db:
+    image: mysql:8.0
+    environment:
+      MYSQL_DATABASE: app
+      MYSQL_USER: app
+      MYSQL_PASSWORD: localpass
+      MYSQL_RANDOM_ROOT_PASSWORD: "yes"
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1"]
+      interval: 5s
+      retries: 20

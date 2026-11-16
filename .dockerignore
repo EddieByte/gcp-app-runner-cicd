@@ -1,0 +1,12 @@
+# Keep the build context small and secrets out of images.
+.git
+.github
+terraform
+docs
+scripts
+logs
+*.md
+app/vendor
+app/tests
+app/phpunit.xml
+.env
