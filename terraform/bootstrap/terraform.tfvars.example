@@ -1,0 +1,3 @@
+# Copy to terraform.tfvars (git-ignored) and adjust.
+project_id = "php-cloudrun-platform"
+region     = "europe-west1"
