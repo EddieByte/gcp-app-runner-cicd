@@ -18,7 +18,7 @@ COPY app/src ./src
 RUN composer dump-autoload --no-dev --optimize --classmap-authoritative
 
 # --- Stage 2: runtime ---------------------------------------------------------
-FROM php:8.3-fpm-alpine AS runtime
+FROM php:8.5-fpm-alpine AS runtime
 
 # `apk upgrade` pulls OS security patches released since the base image was
 # published; every CI build therefore gets the latest fixes. Base image tags
