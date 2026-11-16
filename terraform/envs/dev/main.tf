@@ -44,6 +44,10 @@ module "artifact_registry" {
   project_id    = var.project_id
   region        = var.region
   repository_id = var.artifact_repository_id
+
+  # The deployer only deploys images (it never pushes), but gcloud run deploy
+  # checks it can read the image it's deploying.
+  reader_members = ["serviceAccount:${module.iam.deployer_sa_email}"]
 }
 
 module "cloudsql" {

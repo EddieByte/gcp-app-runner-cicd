@@ -29,3 +29,9 @@ variable "immutable_tags" {
   type        = bool
   default     = true
 }
+
+variable "reader_members" {
+  description = "IAM members allowed to pull images from this repository (e.g. deployer SAs)."
+  type        = list(string)
+  default     = []
+}

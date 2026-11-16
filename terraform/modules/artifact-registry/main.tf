@@ -42,3 +42,16 @@ resource "google_artifact_registry_repository" "this" {
     }
   }
 }
+
+# Read-only access on THIS repository (not project-wide) for identities that
+# deploy images. `gcloud run deploy` verifies the caller can read the image
+# before creating a revision, so each environment's deployer needs this.
+# Docs: https://cloud.google.com/artifact-registry/docs/access-control
+resource "google_artifact_registry_repository_iam_member" "readers" {
+  for_each   = toset(var.reader_members)
+  project    = var.project_id
+  location   = google_artifact_registry_repository.this.location
+  repository = google_artifact_registry_repository.this.name
+  role       = "roles/artifactregistry.reader"
+  member     = each.value
+}
