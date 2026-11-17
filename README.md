@@ -59,7 +59,9 @@ tag ─► check tag ─► PHP tests ─► Cloud Build: build ─► Trivy ─
                                                                                 └─ fails? ─► rollback
 ```
 
-![A release run: tests, Cloud Build (build, Trivy, push) and deploy, all green](docs/images/pipeline-cloud-build-green.png)
+![Release dev-v1.1.0: Resolve environment, PHP tests, Build / Cloud Build (the GitHub-runner fallback skipped), Deploy to dev, all green in 5m 21s](docs/images/pipeline-graph.png)
+
+*A real release (`dev-v1.1.0`): exactly one builder ran (Cloud Build); the GitHub-runner fallback was skipped. The deploy job links to the live app.*
 
 ---
 
