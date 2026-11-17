@@ -238,17 +238,60 @@ trivy image --config trivy.yaml php-app:local
 
 ## Cost and teardown
 
-Main costs while running: the **Cloud SQL** instance and the **load balancer forwarding rule(s)**. Cloud Run scales to zero.
+**What costs money while running:** the **Cloud SQL** instance and the **load balancer forwarding rule(s)**. Both are billed every hour they exist, even with no traffic. Cloud Run scales to zero, and everything else costs close to nothing.
 
-To stop paying (keeps bootstrap, which costs ~nothing):
+There are two levels of teardown:
+
+| Level | Removes | Keeps | Use when |
+|---|---|---|---|
+| **1. Environment (recommended)** | Everything in `terraform/envs/dev`: Cloud SQL (with its data and backups), Cloud Run, load balancer and IP, static bucket, image registry and images, DB secret, app service accounts | The foundation (`terraform/bootstrap`): APIs, state bucket, GitHub sign-in, CI and Cloud Build accounts, which cost ~nothing | Pausing the project; rebuilding later is one `terraform apply` |
+| **2. Everything** | Level 1 + the foundation | Nothing | Finished with the project for good |
+
+### Level 1: remove the environment
 
 ```bash
 cd terraform/envs/dev
-terraform plan -destroy -out=destroy.tfplan
-terraform apply destroy.tfplan
+terraform plan -destroy -out=destroy.tfplan   # review: only "destroy", nothing "add"
+terraform apply destroy.tfplan                # ~5-10 min (Cloud SQL is the slow part)
 ```
 
-Rebuild later with `terraform apply` (the load balancer IP will change, so update `APP_URL`).
+**Check that it's gone.** Every command should print nothing:
+
+```bash
+terraform state list
+gcloud sql instances list
+gcloud run services list --region europe-west1
+gcloud compute forwarding-rules list --global
+gcloud compute addresses list --global
+```
+
+Then confirm in **Billing → Reports** the next day that the daily cost has dropped to about zero.
+
+**Rebuilding later:** `terraform apply` in `terraform/envs/dev`, then update `APP_URL` in the GitHub `dev` environment (the load balancer gets a new IP), and push a new release tag. The database starts empty.
+
+### Level 2: also remove the foundation
+
+Do Level 1 first. The foundation holds the Terraform state bucket, so its own state must be moved out of the bucket before the bucket can be deleted:
+
+1. In `terraform/bootstrap/main.tf`, remove the `lifecycle { prevent_destroy = true }` block on the state bucket.
+2. In `terraform/bootstrap/backend.tf`, comment out the `backend "gcs"` block, then move the state back to your machine:
+   ```bash
+   cd terraform/bootstrap
+   terraform init -migrate-state      # answer "yes"
+   ```
+3. Empty the state bucket (Terraform won't delete a bucket with files in it):
+   ```bash
+   gcloud storage rm --recursive "gs://php-cloudrun-platform-tfstate/**"
+   ```
+4. Destroy:
+   ```bash
+   terraform plan -destroy -out=destroy.tfplan
+   terraform apply destroy.tfplan
+   ```
+
+**Before rebuilding after Level 2:** undo the two file edits (`git restore terraform/bootstrap`). The GitHub sign-in pool ID `github` stays reserved for 30 days: restore it with `gcloud iam workload-identity-pools undelete github --location=global`, or use a new `wif_pool_id` and update `WIF_PROVIDER` in GitHub. Enabled APIs stay on; they cost nothing.
+
+**Removing the project itself:** `gcloud projects delete php-cloudrun-platform` stops everything at once. It can be restored for 30 days; after that the project ID can never be reused.
 
 ---
 
