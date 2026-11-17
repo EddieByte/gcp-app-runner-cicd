@@ -255,6 +255,8 @@ terraform plan -destroy -out=destroy.tfplan   # review: only "destroy", nothing 
 terraform apply destroy.tfplan                # ~5-10 min (Cloud SQL is the slow part)
 ```
 
+> **PowerShell:** quote any argument that contains a dot, e.g. `terraform plan -destroy "-out=destroy.tfplan"` and `terraform apply "destroy.tfplan"`. Unquoted, PowerShell splits `-out=destroy.tfplan` at the dot and Terraform fails with *"Too many command line arguments"*.
+
 **Check that it's gone.** Every command should print nothing:
 
 ```bash
@@ -265,7 +267,39 @@ gcloud compute forwarding-rules list --global
 gcloud compute addresses list --global
 ```
 
+On Windows, the same check in PowerShell, saved to a file you can keep as a record:
+
+```powershell
+& {
+  "=== terraform state ===";  terraform -chdir=terraform/envs/dev state list
+  "=== Cloud SQL ===";        gcloud sql instances list
+  "=== Cloud Run ===";        gcloud run services list --region europe-west1
+  "=== Forwarding rules ==="; gcloud compute forwarding-rules list --global
+  "=== Static IPs ===";       gcloud compute addresses list --global
+  "=== Buckets ===";          gcloud storage ls
+} *> logs\teardown-check.txt; "done"
+```
+
+> gcloud prints `Listed 0 items.` to stderr, so in this file PowerShell shows it wrapped in red `NativeCommandError` lines. That is expected and means the list is empty.
+
 Then confirm in **Billing → Reports** the next day that the daily cost has dropped to about zero.
+
+### Example: tearing down dev
+
+The destroy removed all 30 resources of the environment, with Cloud SQL taking the longest (~1.5 min):
+
+![terraform apply of the destroy plan: Cloud SQL deleted, "Apply complete! Resources: 0 added, 0 changed, 30 destroyed."](images/teardown-destroy-complete.png)
+
+The check afterwards confirmed nothing billable was left:
+
+| Check | Result |
+|---|---|
+| Terraform state (`envs/dev`) | empty |
+| Cloud SQL instances | 0 |
+| Cloud Run services | 0 |
+| Load balancer forwarding rules | 0 |
+| Reserved IP addresses | 0 |
+| Buckets | only the foundation's: `-tfstate`, `-cloudbuild-src`, `-build-reports` |
 
 **Rebuilding later:** `terraform apply` in `terraform/envs/dev`, then update `APP_URL` in the GitHub `dev` environment (the load balancer gets a new IP), and push a new release tag. The database starts empty.
 
