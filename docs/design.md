@@ -63,14 +63,14 @@ guard ─► test ─► build ─► Trivy gate ─► push ─► deploy ─�
 
 | Decision | Why | Trade-off |
 |---|---|---|
-| Nginx + PHP-FPM in **one image** (supervisord) | Brief asks for a Dockerfile; simplest to run on Cloud Run and locally | Two processes per container; Cloud Run **sidecars** are the cleaner upgrade |
+| Nginx + PHP-FPM in **one image** (supervisord) | One unit to build, scan and run; behaves the same on Cloud Run and locally | Two processes per container; Cloud Run **sidecars** are the cleaner upgrade |
 | **Load balancer IP** = "public IP of the service" | Cloud Run has no fixed IP | One more component; gains static IP, `/static` routing, TLS, Cloud Armor |
-| **Artifact Registry**, not GCR | Container Registry is retired | Brief mentions GCR |
+| **Artifact Registry**, not GCR | Container Registry is retired; Artifact Registry adds per-repo IAM, cleanup policies and immutable tags | One more resource to manage |
 | Cloud SQL **public IP, no authorised networks** + connector | Secure (IAM-checked, encrypted) without VPC work | Private IP is stronger; listed under next steps |
 | **Tag-driven releases** instead of "push to main" | Every deploy is deliberate and traceable | One extra command per release |
 | Terraform owns the service, **CI owns the image** | They never overwrite each other (`ignore_changes`) | Image isn't visible in Terraform plans |
 | Terraform applied **manually**, not in the pipeline | Pipeline stays app-only; infra changes are rare and reviewed | No automated infra delivery (HCP Terraform is the option) |
-| State versioning **off** for the test | Minimal setup | No state rollback; one variable turns it on |
+| State versioning **off** in dev | Single maintainer; keeps the setup minimal | No state rollback; one variable turns it on |
 
 ---
 

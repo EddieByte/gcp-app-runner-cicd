@@ -3,8 +3,8 @@
 # PHP-FPM + Nginx in one image, run by supervisord.
 # Build from the REPO ROOT:  docker build -f docker/Dockerfile -t php-app .
 #
-# Why one image: the brief asks for "a Dockerfile", and one container is the
-# simplest unit to run on Cloud Run and locally. Cloud Run sidecars
+# Why one image: a single container is the simplest unit to build, scan,
+# deploy and run identically on Cloud Run and locally. Cloud Run sidecars
 # (Nginx and PHP-FPM as separate containers) are the documented upgrade.
 # Docs: https://cloud.google.com/run/docs/container-contract
 # -----------------------------------------------------------------------------

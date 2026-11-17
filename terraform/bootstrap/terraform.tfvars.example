@@ -2,7 +2,7 @@
 project_id = "php-cloudrun-platform"
 region     = "europe-west1"
 
-# Set true to keep previous state versions (recommended beyond a test setup).
+# Set true to keep previous state versions (recommended for shared or production use).
 enable_state_versioning = false
 
 # CI/CD (Workload Identity Federation)

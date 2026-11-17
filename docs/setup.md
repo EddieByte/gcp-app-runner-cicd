@@ -56,7 +56,7 @@ The main variables:
 | `project_id` | both | GCP project | `php-cloudrun-platform` |
 | `region` | both | Region for all regional resources | `europe-west1` |
 | `github_repository` | bootstrap | Repo allowed to deploy via OIDC | `EddieByte/gcp-app-runner-cicd` |
-| `enable_state_versioning` | bootstrap | Keep old state versions | `false` (test) / `true` (prod) |
+| `enable_state_versioning` | bootstrap | Keep old state versions | `false` (dev) / `true` (prod) |
 | `environment` | dev | Environment name, used in resource names | `dev` |
 | `db_tier` | dev | Cloud SQL machine size | `db-f1-micro` |
 | `db_name`, `db_user` | dev | App database and user | `app` |

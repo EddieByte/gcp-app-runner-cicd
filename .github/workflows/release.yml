@@ -113,9 +113,9 @@ jobs:
 
   # ---------------------------------------------------------------------------
   # 2. PHP unit + integration tests against a real MySQL 8.0.
-  #     The test DB password comes from a GitHub secret, as the brief requires
-  #     for sensitive values. (The cloud DB password lives in Secret Manager
-  #     and never passes through GitHub.)
+  #     The test DB password comes from a GitHub secret: sensitive values are
+  #     never written in the workflow. The real cloud DB password is kept out
+  #     of GitHub entirely; it lives in Secret Manager.
   # ---------------------------------------------------------------------------
   test:
     name: PHP tests
