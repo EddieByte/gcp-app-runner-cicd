@@ -54,6 +54,10 @@ tag pushed ─► guard ─► test ─► build ─► Trivy gate ─► push �
 | **build** | **Cloud Build** builds the image, scans it with Trivy and pushes it only if clean, inside GCP. GitHub holds no push rights. The GitHub runner build is kept as a break-glass fallback |
 | **deploy** | Uploads static files, deploys the exact scanned image, checks `/healthz`, `/readyz` and `/static` through the load balancer, rolls back on failure |
 
+![A release run: tests, Cloud Build (build, Trivy, push) and deploy, all green](docs/images/pipeline-cloud-build-green.png)
+
+![The same build in Cloud Build: build, export, Trivy report, upload reports, Trivy gate](docs/images/cloud-build-steps.png)
+
 Release with:
 
 ```bash

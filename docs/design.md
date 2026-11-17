@@ -85,4 +85,5 @@ guard ─► test ─► build ─► Trivy gate ─► push ─► deploy ─�
 | `trivy-action@0.28.0` not found | Upstream renamed tags with a `v` prefix | Pinned `v0.36.0` **by commit SHA** (and later every action) |
 | Deploy denied: `artifactregistry.repositories.downloadArtifacts` | After splitting builder/deployer identities, the deployer lost read access; `gcloud run deploy` checks it | Granted `artifactregistry.reader` on the one repository. **The automatic rollback restored the previous revision while this was broken.** |
 | PHP couldn't see Cloud Run env vars (design-time catch) | PHP-FPM clears environment variables by default | `clear_env = no` in the FPM pool config |
+| Internet dropped during `terraform apply` | State couldn't be saved and the lock stayed held; GCP kept creating Cloud SQL | `force-unlock` the stale lock, `terraform state push errored.tfstate`, waited for the instance to be `RUNNABLE`, `terraform import`-ed it. Plan then showed only the missing resources: nothing lost or duplicated |
 | Node 20 / CodeQL v3 / `ubuntu-latest` warnings | Platform deprecations | Upgraded actions, pinned by SHA, pinned runner to `ubuntu-24.04` |
