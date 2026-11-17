@@ -6,6 +6,10 @@ How the release pipeline works, how the project is secured, and why it is built 
 
 ## Release pipeline
 
+![A release run: tests, Cloud Build (build, Trivy, push) and deploy, all green](images/pipeline-cloud-build-green.png)
+
+![The same build in Cloud Build: build, export, Trivy report, upload reports, Trivy gate](images/cloud-build-steps.png)
+
 **Nothing deploys on a normal push or merge.** Only release tags trigger the pipeline:
 
 | Tag | Must be on branch | Deploys to |
