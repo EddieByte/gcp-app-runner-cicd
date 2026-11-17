@@ -164,7 +164,7 @@ terraform -chdir=terraform/envs/dev  output github_environment_vars
 
 ## Access the application
 
-> The IP `34.95.123.251` is from the dev build documented here. It changes whenever the environment is rebuilt; get the current one with `./scripts/get-service-ip.sh dev`.
+> IPs shown here are examples from earlier dev builds. It changes whenever the environment is rebuilt; get the current one with `./scripts/get-service-ip.sh dev` (Bash) or `scripts\get-service-ip.cmd dev` (cmd/PowerShell).
 
 | URL | Expected |
 |---|---|

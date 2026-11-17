@@ -4,7 +4,7 @@ A PHP application (Nginx + PHP-FPM) running on **Cloud Run** with a **Cloud SQL*
 
 ![The deployed app: Cloud Run revision, PHP-FPM behind Nginx, connected to Cloud SQL](docs/images/app-status-page.png)
 
-*The deployed app: every row is a working part of the stack. The revision is named after the release tag, the database connection goes through the Cloud SQL connector, the visit counter is stored in Cloud SQL, and the styling comes from Cloud Storage.*
+*The deployed app (release `dev-v1.1.0`, built by Cloud Build): every row is a working part of the stack. The revision is named after the release tag, the database connection goes through the Cloud SQL connector, the visit counter is stored in Cloud SQL, and the styling comes from Cloud Storage.*
 
 ---
 
@@ -106,14 +106,23 @@ Then open the app at `http://<load-balancer-ip>` (allow ~5-10 min for a new load
 Cloud Run has **no fixed IP**; it only has a `*.run.app` URL. The app's public IP is the load balancer's reserved address, and this script finds it for any environment:
 
 ```bash
-./scripts/get-service-ip.sh dev          # prints the IP
-IP=$(./scripts/get-service-ip.sh dev)    # or capture it
+./scripts/get-service-ip.sh dev          # Bash (Linux, macOS, WSL, Git Bash, Cloud Shell)
+IP=$(./scripts/get-service-ip.sh dev)    # capture just the IP
 ```
+
+```bat
+scripts\get-service-ip.cmd dev          :: Windows cmd or PowerShell (runs the same script via Git Bash)
+```
+
+![Script run for dev: authenticated, service found, health check OK, public IP 136.81.53.138](docs/images/script-output.png)
+
+![Script run for prod (not deployed): clear error, exit code 4, logged](docs/images/script-error.png)
 
 - **Takes an environment** (`dev` / `prod`) and derives the resource names from it. Options: `--project`, `--region`, `--no-check`, `--help`.
 - **Checks before it answers:** `gcloud` installed, logged in, service deployed, IP reserved. It then health-checks `/healthz` on the IP.
 - **Clear errors with exit codes:** `1` usage, `2` no gcloud, `3` not logged in, `4` service not found, `5` IP not found.
 - **Logs every run** to `logs/get-service-ip.log`.
+- **Runs in any shell.** Bash runs the `.sh` directly. On Windows, `get-service-ip.cmd` finds Git Bash and runs the same script, passing the arguments through and returning its exit code. (Typing `./scripts/get-service-ip.sh` in PowerShell doesn't work: Windows opens the file with its default program and drops the arguments.)
 
 ---
 
@@ -125,7 +134,7 @@ docker/       Dockerfile + Nginx, PHP-FPM and supervisord config
 terraform/    bootstrap/ (one-time), envs/dev/, modules/ (6 reusable modules)
 .github/      release pipeline, reusable build workflows (Cloud Build / GitHub), weekly rescan
 cloudbuild.yaml  the Cloud Build build -> Trivy -> push definition
-scripts/      get-service-ip.sh
+scripts/      get-service-ip.sh (+ get-service-ip.cmd wrapper for cmd/PowerShell)
 docs/         setup guide, design and security notes, images
 dr.md         disaster recovery plan
 extra.md      extra features
