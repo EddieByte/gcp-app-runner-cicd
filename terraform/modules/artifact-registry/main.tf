@@ -1,9 +1,9 @@
 # -----------------------------------------------------------------------------
 # Module: artifact-registry
 #
-# Docker repository for the application image. Artifact Registry replaces the
-# retired Container Registry (gcr.io), so we use it even though the brief
-# mentions GCR.
+# Docker repository for the application image. Artifact Registry is used
+# rather than Container Registry (gcr.io), which Google has retired: it adds
+# regional repositories, IAM per repository, cleanup policies and immutable tags.
 # Docs: https://cloud.google.com/artifact-registry/docs/docker
 #       https://cloud.google.com/artifact-registry/docs/repositories/cleanup-policy
 # -----------------------------------------------------------------------------

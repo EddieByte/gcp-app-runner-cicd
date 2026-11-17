@@ -56,7 +56,7 @@ The main variables:
 | `project_id` | both | GCP project | `php-cloudrun-platform` |
 | `region` | both | Region for all regional resources | `europe-west1` |
 | `github_repository` | bootstrap | Repo allowed to deploy via OIDC | `EddieByte/gcp-app-runner-cicd` |
-| `enable_state_versioning` | bootstrap | Keep old state versions | `false` (test) / `true` (prod) |
+| `enable_state_versioning` | bootstrap | Keep old state versions | `false` (dev) / `true` (prod) |
 | `environment` | dev | Environment name, used in resource names | `dev` |
 | `db_tier` | dev | Cloud SQL machine size | `db-f1-micro` |
 | `db_name`, `db_user` | dev | App database and user | `app` |
@@ -143,6 +143,7 @@ terraform -chdir=terraform/envs/dev  output github_environment_vars
 | `BUILDER_SA` | from `github_vars` |
 | `SCANNER_SA` | from `github_vars` |
 | `CLOUD_RUN_SERVICE_DEV` | `php-app-dev` |
+| `BUILD_BACKEND` *(optional)* | `cloudbuild` (default if unset) or `github`: which builder builds, scans and pushes the image |
 
 **Repository secret:**
 
@@ -163,7 +164,7 @@ terraform -chdir=terraform/envs/dev  output github_environment_vars
 
 ## Access the application
 
-> The IP `34.95.123.251` is from the dev build documented here. It changes whenever the environment is rebuilt; get the current one with `./scripts/get-service-ip.sh dev`.
+> IPs shown here are examples from earlier dev builds. It changes whenever the environment is rebuilt; get the current one with `./scripts/get-service-ip.sh dev` (Bash) or `scripts\get-service-ip.cmd dev` (cmd/PowerShell).
 
 | URL | Expected |
 |---|---|
@@ -237,17 +238,94 @@ trivy image --config trivy.yaml php-app:local
 
 ## Cost and teardown
 
-Main costs while running: the **Cloud SQL** instance and the **load balancer forwarding rule(s)**. Cloud Run scales to zero.
+**What costs money while running:** the **Cloud SQL** instance and the **load balancer forwarding rule(s)**. Both are billed every hour they exist, even with no traffic. Cloud Run scales to zero, and everything else costs close to nothing.
 
-To stop paying (keeps bootstrap, which costs ~nothing):
+There are two levels of teardown:
+
+| Level | Removes | Keeps | Use when |
+|---|---|---|---|
+| **1. Environment (recommended)** | Everything in `terraform/envs/dev`: Cloud SQL (with its data and backups), Cloud Run, load balancer and IP, static bucket, image registry and images, DB secret, app service accounts | The foundation (`terraform/bootstrap`): APIs, state bucket, GitHub sign-in, CI and Cloud Build accounts, which cost ~nothing | Pausing the project; rebuilding later is one `terraform apply` |
+| **2. Everything** | Level 1 + the foundation | Nothing | Finished with the project for good |
+
+### Level 1: remove the environment
 
 ```bash
 cd terraform/envs/dev
-terraform plan -destroy -out=destroy.tfplan
-terraform apply destroy.tfplan
+terraform plan -destroy -out=destroy.tfplan   # review: only "destroy", nothing "add"
+terraform apply destroy.tfplan                # ~5-10 min (Cloud SQL is the slow part)
 ```
 
-Rebuild later with `terraform apply` (the load balancer IP will change, so update `APP_URL`).
+> **PowerShell:** quote any argument that contains a dot, e.g. `terraform plan -destroy "-out=destroy.tfplan"` and `terraform apply "destroy.tfplan"`. Unquoted, PowerShell splits `-out=destroy.tfplan` at the dot and Terraform fails with *"Too many command line arguments"*.
+
+**Check that it's gone.** Every command should print nothing:
+
+```bash
+terraform state list
+gcloud sql instances list
+gcloud run services list --region europe-west1
+gcloud compute forwarding-rules list --global
+gcloud compute addresses list --global
+```
+
+On Windows, the same check in PowerShell, saved to a file you can keep as a record:
+
+```powershell
+& {
+  "=== terraform state ===";  terraform -chdir=terraform/envs/dev state list
+  "=== Cloud SQL ===";        gcloud sql instances list
+  "=== Cloud Run ===";        gcloud run services list --region europe-west1
+  "=== Forwarding rules ==="; gcloud compute forwarding-rules list --global
+  "=== Static IPs ===";       gcloud compute addresses list --global
+  "=== Buckets ===";          gcloud storage ls
+} *> logs\teardown-check.txt; "done"
+```
+
+> gcloud prints `Listed 0 items.` to stderr, so in this file PowerShell shows it wrapped in red `NativeCommandError` lines. That is expected and means the list is empty.
+
+Then confirm in **Billing → Reports** the next day that the daily cost has dropped to about zero.
+
+### Example: tearing down dev
+
+The destroy removed all 30 resources of the environment, with Cloud SQL taking the longest (~1.5 min):
+
+![terraform apply of the destroy plan: Cloud SQL deleted, "Apply complete! Resources: 0 added, 0 changed, 30 destroyed."](images/teardown-destroy-complete.png)
+
+The check afterwards confirmed nothing billable was left:
+
+| Check | Result |
+|---|---|
+| Terraform state (`envs/dev`) | empty |
+| Cloud SQL instances | 0 |
+| Cloud Run services | 0 |
+| Load balancer forwarding rules | 0 |
+| Reserved IP addresses | 0 |
+| Buckets | only the foundation's: `-tfstate`, `-cloudbuild-src`, `-build-reports` |
+
+**Rebuilding later:** `terraform apply` in `terraform/envs/dev`, then update `APP_URL` in the GitHub `dev` environment (the load balancer gets a new IP), and push a new release tag. The database starts empty.
+
+### Level 2: also remove the foundation
+
+Do Level 1 first. The foundation holds the Terraform state bucket, so its own state must be moved out of the bucket before the bucket can be deleted:
+
+1. In `terraform/bootstrap/main.tf`, remove the `lifecycle { prevent_destroy = true }` block on the state bucket.
+2. In `terraform/bootstrap/backend.tf`, comment out the `backend "gcs"` block, then move the state back to your machine:
+   ```bash
+   cd terraform/bootstrap
+   terraform init -migrate-state      # answer "yes"
+   ```
+3. Empty the state bucket (Terraform won't delete a bucket with files in it):
+   ```bash
+   gcloud storage rm --recursive "gs://php-cloudrun-platform-tfstate/**"
+   ```
+4. Destroy:
+   ```bash
+   terraform plan -destroy -out=destroy.tfplan
+   terraform apply destroy.tfplan
+   ```
+
+**Before rebuilding after Level 2:** undo the two file edits (`git restore terraform/bootstrap`). The GitHub sign-in pool ID `github` stays reserved for 30 days: restore it with `gcloud iam workload-identity-pools undelete github --location=global`, or use a new `wif_pool_id` and update `WIF_PROVIDER` in GitHub. Enabled APIs stay on; they cost nothing.
+
+**Removing the project itself:** `gcloud projects delete php-cloudrun-platform` stops everything at once. It can be restored for 30 days; after that the project ID can never be reused.
 
 ---
 

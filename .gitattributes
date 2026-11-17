@@ -1,3 +1,6 @@
 # Shell scripts must keep Unix line endings, even when checked out on Windows,
 # or bash fails with "$'\r': command not found".
 *.sh text eol=lf
+
+# Windows batch files need Windows line endings to run reliably in cmd.
+*.cmd text eol=crlf

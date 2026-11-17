@@ -1,0 +1,112 @@
+# =============================================================================
+# Reusable build: Cloud Build (DEFAULT builder)
+#
+# Called by release.yml. Submits cloudbuild.yaml, which builds the image,
+# scans it with Trivy and pushes it to Artifact Registry ONLY if the scan
+# passes, all inside GCP and running as the cloudbuild-runner service account.
+#
+# GitHub never holds push rights on this path: ci-builder can only submit
+# builds. The Cloud Build log, the Trivy report and the image digest are
+# brought back into this run.
+#
+# Docs: https://cloud.google.com/build/docs/running-builds/submit-build-via-cli-api
+# =============================================================================
+name: build-cloudbuild
+
+on:
+  workflow_call:
+    outputs:
+      digest:
+        description: sha256 digest of the pushed image
+        value: ${{ jobs.build.outputs.digest }}
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Cloud Build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write   # OIDC token for Workload Identity Federation
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+    env:
+      PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+      REGION: ${{ vars.GCP_REGION }}
+      IMAGE: ${{ vars.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GAR_REPOSITORY }}/${{ vars.IMAGE_NAME }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Authenticate to Google Cloud as the builder (keyless)
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+          service_account: ${{ vars.BUILDER_SA }}
+
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+
+      - name: Build, scan and push in Cloud Build
+        id: build
+        run: |
+          set -euo pipefail
+          RUNNER_SA="projects/${PROJECT_ID}/serviceAccounts/cloudbuild-runner@${PROJECT_ID}.iam.gserviceaccount.com"
+          REPORTS="${PROJECT_ID}-build-reports"
+
+          # 1. Submit (asynchronously, so we control waiting and log output).
+          BUILD_ID=$(gcloud builds submit . \
+            --async \
+            --config cloudbuild.yaml \
+            --region "$REGION" \
+            --service-account "$RUNNER_SA" \
+            --gcs-source-staging-dir "gs://${PROJECT_ID}-cloudbuild-src/source" \
+            --substitutions "_IMAGE=${IMAGE},_TAG=${GITHUB_REF_NAME},_REPORTS_BUCKET=${REPORTS}" \
+            --format='value(id)')
+          echo "Cloud Build: https://console.cloud.google.com/cloud-build/builds;region=${REGION}/${BUILD_ID}?project=${PROJECT_ID}"
+
+          # 2. Wait for it to finish (up to 25 min).
+          STATUS=QUEUED
+          for _ in $(seq 1 150); do
+            STATUS=$(gcloud builds describe "$BUILD_ID" --region "$REGION" --format='value(status)')
+            case "$STATUS" in QUEUED|PENDING|WORKING) sleep 10 ;; *) break ;; esac
+          done
+          echo "Build finished with status: $STATUS"
+
+          # 3. Show the Cloud Build log here (it reaches Cloud Logging a little late).
+          sleep 15
+          echo "::group::Cloud Build log"
+          gcloud logging read "resource.type=build AND resource.labels.build_id=${BUILD_ID}" \
+            --order=asc --limit=10000 --format='value(textPayload)' || echo "(could not read build logs)"
+          echo "::endgroup::"
+
+          # 4. Fetch the Trivy reports (saved before the gate, so present even on failure).
+          gcloud storage cp "gs://${REPORTS}/${GITHUB_REF_NAME}/trivy-report.*" . || echo "No Trivy reports found"
+
+          if [[ "$STATUS" != "SUCCESS" ]]; then
+            echo "::error::Cloud Build ${STATUS}. Nothing was pushed; see the Trivy summary and the log above."
+            exit 1
+          fi
+
+          # 5. Digest of the pushed image, for deploy-by-digest.
+          DIGEST=$(gcloud builds describe "$BUILD_ID" --region "$REGION" --format='value(results.images[0].digest)')
+          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+          echo "Pushed by Cloud Build: \`${IMAGE}@${DIGEST}\`" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish Trivy summary
+        if: always()
+        uses: ./.github/actions/trivy-summary
+        with:
+          image: ${{ env.IMAGE }}:${{ github.ref_name }}
+          builder: Cloud Build
+
+      - name: Upload Trivy reports as a build artifact
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: trivy-report-${{ github.ref_name }}
+          path: |
+            trivy-report.json
+            trivy-report.txt
+          retention-days: 30
+          if-no-files-found: ignore

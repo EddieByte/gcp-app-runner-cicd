@@ -11,7 +11,8 @@
 #   git checkout dev  && git tag dev-v1.2.0 && git push origin dev-v1.2.0
 #   git checkout main && git tag v1.2.0     && git push origin v1.2.0
 #
-# Stages: guard -> test -> build -> Trivy scan -> push -> deploy
+# Stages: guard -> test -> build (Cloud Build, or GitHub runner as fallback)
+#         -> deploy
 #         -> smoke test (automatic rollback on failure)
 #
 # Auth: Workload Identity Federation (OIDC). No service-account keys anywhere.
@@ -31,6 +32,16 @@ on:
     tags:
       - "dev-v[0-9]+.[0-9]+.[0-9]+"
       - "v[0-9]+.[0-9]+.[0-9]+"
+  # Break-glass: re-run a release by hand (Actions -> release -> Run workflow),
+  # choosing an existing release TAG and, if needed, a different builder.
+  # The guard still refuses anything that isn't a release tag.
+  workflow_dispatch:
+    inputs:
+      build_backend:
+        description: "Builder for this run (default = BUILD_BACKEND variable, else Cloud Build)"
+        type: choice
+        options: [default, cloudbuild, github]
+        default: default
 
 # Never run two deployments to the same environment at once; don't cancel a
 # deploy halfway through.
@@ -59,6 +70,7 @@ jobs:
     outputs:
       environment: ${{ steps.resolve.outputs.environment }}
       version: ${{ github.ref_name }}
+      backend: ${{ steps.resolve.outputs.backend }}
     steps:
       - name: Check out (full history, to verify branch ancestry)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -70,6 +82,20 @@ jobs:
         run: |
           set -euo pipefail
           TAG="${GITHUB_REF_NAME}"
+
+          # Manual runs must also be started from a release tag.
+          if [[ "$GITHUB_REF_TYPE" != "tag" ]] || ! [[ "$TAG" =~ ^(dev-)?v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::'$TAG' is not a release tag. Run this workflow from a dev-vX.Y.Z or vX.Y.Z tag."
+            exit 1
+          fi
+
+          # Builder: manual choice > BUILD_BACKEND variable > Cloud Build.
+          BACKEND="${{ inputs.build_backend }}"
+          [[ -z "$BACKEND" || "$BACKEND" == "default" ]] && BACKEND="${{ vars.BUILD_BACKEND }}"
+          [[ -z "$BACKEND" ]] && BACKEND="cloudbuild"
+          [[ "$BACKEND" == "cloudbuild" || "$BACKEND" == "github" ]] || { echo "::error::Unknown builder '$BACKEND'"; exit 1; }
+          echo "backend=$BACKEND" >> "$GITHUB_OUTPUT"
+
           if [[ "$TAG" == dev-v* ]]; then
             ENVIRONMENT=dev;  BRANCH=dev
           else
@@ -83,13 +109,13 @@ jobs:
           fi
 
           echo "environment=$ENVIRONMENT" >> "$GITHUB_OUTPUT"
-          echo "### Release $TAG -> $ENVIRONMENT (from $BRANCH)" >> "$GITHUB_STEP_SUMMARY"
+          echo "### Release $TAG -> $ENVIRONMENT (from $BRANCH), built by $BACKEND" >> "$GITHUB_STEP_SUMMARY"
 
   # ---------------------------------------------------------------------------
   # 2. PHP unit + integration tests against a real MySQL 8.0.
-  #     The test DB password comes from a GitHub secret, as the brief requires
-  #     for sensitive values. (The cloud DB password lives in Secret Manager
-  #     and never passes through GitHub.)
+  #     The test DB password comes from a GitHub secret: sensitive values are
+  #     never written in the workflow. The real cloud DB password is kept out
+  #     of GitHub entirely; it lives in Secret Manager.
   # ---------------------------------------------------------------------------
   test:
     name: PHP tests
@@ -136,142 +162,31 @@ jobs:
         run: vendor/bin/phpunit --testsuite integration
 
   # ---------------------------------------------------------------------------
-  # 3. Build -> Trivy scan -> push. The image is pushed ONLY if the scan
-  #    passes, so nothing vulnerable ever reaches the registry.
-  #    Tags are immutable in Artifact Registry: v1.2.0 always means this image.
+  # 3. Build -> Trivy -> push, by ONE of two interchangeable builders.
+  #    Each lives in its own reusable workflow; exactly one runs per release.
+  #      cloudbuild (default): build-cloudbuild.yml, inside GCP; GitHub holds
+  #                            no push rights on this path
+  #      github (fallback):    build-github.yml, on the GitHub runner
+  #    Both enforce the same Trivy policy and return the image digest.
   # ---------------------------------------------------------------------------
-  build:
-    name: Build, scan, push
+  build-cloudbuild:
+    name: Build
     needs: [guard, test]
-    runs-on: ubuntu-24.04
+    if: needs.guard.outputs.backend == 'cloudbuild'
+    uses: ./.github/workflows/build-cloudbuild.yml
     permissions:
       contents: read
-      id-token: write          # OIDC token for Workload Identity Federation
-      security-events: write   # upload Trivy SARIF to the Security tab
-    outputs:
-      digest: ${{ steps.push.outputs.digest }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      id-token: write
 
-      - name: Build image
-        run: |
-          docker build \
-            -f docker/Dockerfile \
-            --label "org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}" \
-            --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
-            --label "org.opencontainers.image.version=${GITHUB_REF_NAME}" \
-            -t "${IMAGE}:${GITHUB_REF_NAME}" .
-
-      # --- Reports (informational, never block) ---------------------------
-      # Full picture: ALL severities, fixed or not, so the run shows what is
-      # in the image, not just what blocks it.
-      - name: Trivy full report (JSON, all severities)
-        if: always()
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0 (pinned to commit SHA)
-        with:
-          image-ref: ${{ env.IMAGE }}:${{ github.ref_name }}
-          scanners: vuln,secret
-          severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
-          ignore-unfixed: false
-          format: json
-          output: trivy-report.json
-          exit-code: "0"
-
-      - name: Trivy full report (table, all severities)
-        if: always()
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0 (pinned to commit SHA)
-        with:
-          image-ref: ${{ env.IMAGE }}:${{ github.ref_name }}
-          scanners: vuln,secret
-          severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
-          ignore-unfixed: false
-          format: table
-          output: trivy-report.txt
-          exit-code: "0"
-
-      # Severity table + full report on the run's Summary page.
-      - name: Publish Trivy summary
-        if: always()
-        run: |
-          J=trivy-report.json
-          [[ -f "$J" ]] || { echo "No Trivy report produced." >> "$GITHUB_STEP_SUMMARY"; exit 0; }
-          count() { jq --arg s "$1" '[.Results[]?.Vulnerabilities[]? | select(.Severity==$s)] | length' "$J"; }
-          fixable() { jq --arg s "$1" '[.Results[]?.Vulnerabilities[]? | select(.Severity==$s and ((.FixedVersion // "") != ""))] | length' "$J"; }
-          secrets=$(jq '[.Results[]?.Secrets[]?] | length' "$J")
-          {
-            echo "## Trivy image scan: \`${IMAGE}:${GITHUB_REF_NAME}\`"
-            echo
-            echo "| Severity | Found | Fix available | Blocks the release? |"
-            echo "|---|---:|---:|---|"
-            for s in CRITICAL HIGH MEDIUM LOW UNKNOWN; do
-              case $s in CRITICAL|HIGH) b="yes, if a fix exists";; *) b="no (reported only)";; esac
-              echo "| $s | $(count $s) | $(fixable $s) | $b |"
-            done
-            echo "| Secrets | $secrets | n/a | yes |"
-            echo
-            echo "Policy: \`trivy.yaml\` (fixable HIGH/CRITICAL and secrets block). Accepted risks: \`.trivyignore\`."
-            echo
-            echo "<details><summary>Full Trivy report</summary>"
-            echo
-            echo '```'
-            head -c 900000 trivy-report.txt
-            echo '```'
-            echo "</details>"
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Upload Trivy reports as a build artifact
-        if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: trivy-report-${{ github.ref_name }}
-          path: |
-            trivy-report.json
-            trivy-report.txt
-            trivy-image.sarif
-          retention-days: 30
-          if-no-files-found: ignore
-
-      - name: Trivy image scan (report to Security tab)
-        if: always()
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0 (pinned to commit SHA)
-        with:
-          image-ref: ${{ env.IMAGE }}:${{ github.ref_name }}
-          trivy-config: trivy.yaml
-          format: sarif
-          output: trivy-image.sarif
-          exit-code: "0"
-
-      - name: Upload Trivy results
-        if: always()
-        uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
-        with:
-          sarif_file: trivy-image.sarif
-          category: trivy-image
-
-      - name: Trivy image scan (gate - fails on fixable HIGH/CRITICAL)
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0 (pinned to commit SHA)
-        with:
-          image-ref: ${{ env.IMAGE }}:${{ github.ref_name }}
-          trivy-config: trivy.yaml
-          format: table
-
-      - name: Authenticate to Google Cloud as the builder (keyless)
-        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
-        with:
-          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
-          service_account: ${{ vars.BUILDER_SA }}   # can push images, nothing else
-
-      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
-
-      - name: Push image
-        id: push
-        run: |
-          set -euo pipefail
-          gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
-          docker push "${IMAGE}:${GITHUB_REF_NAME}"
-          DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "${IMAGE}:${GITHUB_REF_NAME}" | cut -d@ -f2)
-          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
-          echo "Pushed \`${IMAGE}@${DIGEST}\`" >> "$GITHUB_STEP_SUMMARY"
+  build-github:
+    name: Build
+    needs: [guard, test]
+    if: needs.guard.outputs.backend == 'github'
+    uses: ./.github/workflows/build-github.yml
+    permissions:
+      contents: read
+      id-token: write
+      security-events: write
 
   # ---------------------------------------------------------------------------
   # 4. Deploy by DIGEST (not tag) so exactly the scanned bytes run.
@@ -282,7 +197,11 @@ jobs:
   # ---------------------------------------------------------------------------
   deploy:
     name: Deploy to ${{ needs.guard.outputs.environment }}
-    needs: [guard, build]
+    needs: [guard, build-cloudbuild, build-github]
+    # Run if the selected builder succeeded (the other one is skipped).
+    if: >-
+      always() && needs.guard.result == 'success' &&
+      (needs.build-cloudbuild.result == 'success' || needs.build-github.result == 'success')
     runs-on: ubuntu-24.04
     environment:
       name: ${{ needs.guard.outputs.environment }}
@@ -292,6 +211,7 @@ jobs:
       id-token: write
     env:
       # Environment-level variables (differ between dev and prod)
+      DIGEST: ${{ needs.build-cloudbuild.outputs.digest || needs.build-github.outputs.digest }}
       SERVICE: ${{ vars.CLOUD_RUN_SERVICE }}
       STATIC_BUCKET: ${{ vars.STATIC_BUCKET }}
       APP_URL: ${{ vars.APP_URL }}             # load balancer URL
@@ -330,7 +250,7 @@ jobs:
           # Revision named after the release, e.g. php-app-dev-dev-v1-2-0,
           # so the console shows exactly which release is serving.
           gcloud run deploy "$SERVICE" \
-            --image "${IMAGE}@${{ needs.build.outputs.digest }}" \
+            --image "${IMAGE}@${{ env.DIGEST }}" \
             --region "$REGION" \
             --revision-suffix "${GITHUB_REF_NAME//./-}" \
             --quiet
@@ -366,6 +286,6 @@ jobs:
           {
             echo "### Deployed ${GITHUB_REF_NAME} to ${{ needs.guard.outputs.environment }}"
             echo "- Service: \`${SERVICE}\`"
-            echo "- Image: \`${IMAGE}@${{ needs.build.outputs.digest }}\`"
+            echo "- Image: \`${IMAGE}@${{ env.DIGEST }}\`"
             echo "- URL: ${APP_URL}"
           } >> "$GITHUB_STEP_SUMMARY"

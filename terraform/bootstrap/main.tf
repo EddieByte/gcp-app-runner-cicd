@@ -40,8 +40,9 @@ resource "google_storage_bucket" "tfstate" {
   public_access_prevention    = "enforced" # state can contain secrets
 
   # Versioning lets us recover a corrupted or overwritten state file.
-  # Disabled for now (var.enable_state_versioning = false) to keep the test
-  # setup minimal; recommended ON for any shared or production environment.
+  # Off by default for this single-maintainer dev setup (cost and simplicity);
+  # turn ON (var.enable_state_versioning = true) for any shared or production
+  # environment.
   versioning {
     enabled = var.enable_state_versioning
   }

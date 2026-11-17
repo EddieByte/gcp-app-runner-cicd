@@ -1,0 +1,128 @@
+# =============================================================================
+# Reusable build: GitHub runner (FALLBACK builder)
+#
+# Called by release.yml when BUILD_BACKEND=github, or when a run is started
+# manually with build_backend=github (e.g. if Cloud Build is unavailable).
+# Same policy as the Cloud Build path: build -> Trivy -> push only if clean.
+# =============================================================================
+name: build-github
+
+on:
+  workflow_call:
+    outputs:
+      digest:
+        description: sha256 digest of the pushed image
+        value: ${{ jobs.build.outputs.digest }}
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: GitHub runner
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write          # OIDC token for Workload Identity Federation
+      security-events: write   # upload Trivy SARIF to the Security tab
+    outputs:
+      digest: ${{ steps.push.outputs.digest }}
+    env:
+      REGION: ${{ vars.GCP_REGION }}
+      IMAGE: ${{ vars.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GAR_REPOSITORY }}/${{ vars.IMAGE_NAME }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Build image
+        run: |
+          docker build \
+            -f docker/Dockerfile \
+            --label "org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}" \
+            --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
+            --label "org.opencontainers.image.version=${GITHUB_REF_NAME}" \
+            -t "${IMAGE}:${GITHUB_REF_NAME}" .
+
+      # Reports (informational, never block): every severity, fixed or not.
+      - name: Trivy full report (JSON)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ env.IMAGE }}:${{ github.ref_name }}
+          scanners: vuln,secret
+          severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
+          ignore-unfixed: false
+          format: json
+          output: trivy-report.json
+          exit-code: "0"
+
+      - name: Trivy full report (table)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ env.IMAGE }}:${{ github.ref_name }}
+          scanners: vuln,secret
+          severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
+          ignore-unfixed: false
+          format: table
+          output: trivy-report.txt
+          exit-code: "0"
+
+      - name: Publish Trivy summary
+        if: always()
+        uses: ./.github/actions/trivy-summary
+        with:
+          image: ${{ env.IMAGE }}:${{ github.ref_name }}
+          builder: GitHub runner
+
+      - name: Trivy SARIF (for the Security tab)
+        if: always()
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ env.IMAGE }}:${{ github.ref_name }}
+          trivy-config: trivy.yaml
+          format: sarif
+          output: trivy-image.sarif
+          exit-code: "0"
+
+      - name: Upload Trivy results to the Security tab
+        if: always()
+        uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+        with:
+          sarif_file: trivy-image.sarif
+          category: trivy-image
+
+      - name: Upload Trivy reports as a build artifact
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: trivy-report-${{ github.ref_name }}
+          path: |
+            trivy-report.json
+            trivy-report.txt
+            trivy-image.sarif
+          retention-days: 30
+          if-no-files-found: ignore
+
+      # Gate: fixable HIGH/CRITICAL or secrets stop the release before any push.
+      - name: Trivy gate
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ env.IMAGE }}:${{ github.ref_name }}
+          trivy-config: trivy.yaml
+          format: table
+
+      - name: Authenticate to Google Cloud as the builder (keyless)
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+          service_account: ${{ vars.BUILDER_SA }}
+
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+
+      - name: Push image (only reached if the gate passed)
+        id: push
+        run: |
+          set -euo pipefail
+          gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
+          docker push "${IMAGE}:${GITHUB_REF_NAME}"
+          DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "${IMAGE}:${GITHUB_REF_NAME}" | cut -d@ -f2)
+          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+          echo "Pushed from GitHub runner: \`${IMAGE}@${DIGEST}\`" >> "$GITHUB_STEP_SUMMARY"

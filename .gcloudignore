@@ -1,0 +1,11 @@
+# Files NOT uploaded when GitHub Actions submits a build to Cloud Build.
+# Only what the image and scan need goes up: app/, docker/, trivy.yaml,
+# .trivyignore and cloudbuild.yaml.
+.git
+.github
+terraform
+docs
+scripts
+logs
+*.md
+app/vendor
