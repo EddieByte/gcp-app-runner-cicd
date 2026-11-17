@@ -143,6 +143,7 @@ terraform -chdir=terraform/envs/dev  output github_environment_vars
 | `BUILDER_SA` | from `github_vars` |
 | `SCANNER_SA` | from `github_vars` |
 | `CLOUD_RUN_SERVICE_DEV` | `php-app-dev` |
+| `BUILD_BACKEND` *(optional)* | `cloudbuild` (default if unset) or `github`: which builder builds, scans and pushes the image |
 
 **Repository secret:**
 

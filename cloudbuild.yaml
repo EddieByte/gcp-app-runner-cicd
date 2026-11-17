@@ -1,0 +1,80 @@
+# =============================================================================
+# Cloud Build: build -> Trivy -> push, inside Google Cloud.
+#
+# Used when the GitHub repository variable BUILD_BACKEND = cloudbuild.
+# GitHub Actions still runs the release (tags, tests, deploy, rollback); it
+# submits this build and waits for it.
+#
+# Same rule as the GitHub path: the image is pushed ONLY if every step
+# succeeds. Cloud Build pushes the `images:` list at the very end, so a failed
+# Trivy gate means nothing reaches Artifact Registry.
+#
+# Docs: https://cloud.google.com/build/docs/build-config-file-schema
+#       https://cloud.google.com/build/docs/securing-builds/configure-user-specified-service-accounts
+# =============================================================================
+
+substitutions:
+  _IMAGE: ""                      # e.g. europe-west1-docker.pkg.dev/<project>/php-app/php-app
+  _TAG: ""                        # the release tag, e.g. dev-v1.2.0
+  _REPORTS_BUCKET: ""             # where Trivy reports are saved for GitHub to publish
+  _TRIVY: aquasec/trivy:0.76.2    # pinned scanner version
+
+steps:
+  # 1. Build from the same Dockerfile as the GitHub path.
+  - id: build
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -f
+      - docker/Dockerfile
+      - --label=org.opencontainers.image.version=${_TAG}
+      - -t
+      - ${_IMAGE}:${_TAG}
+      - .
+
+  # 2. Save the image as a file so the Trivy container can read it.
+  - id: export
+    name: gcr.io/cloud-builders/docker
+    args: [save, -o, /workspace/image.tar, "${_IMAGE}:${_TAG}"]
+
+  # 3. Full report: every severity, fixed or not. Never fails the build.
+  #    Printed to the build log (shown in GitHub) and saved as files.
+  - id: trivy-report
+    name: ${_TRIVY}
+    entrypoint: sh
+    args:
+      - -c
+      - |
+        trivy image --input /workspace/image.tar --scanners vuln,secret \
+          --format json --output /workspace/trivy-report.json --exit-code 0
+        trivy image --input /workspace/image.tar --scanners vuln,secret \
+          --format table --output /workspace/trivy-report.txt --exit-code 0
+        cat /workspace/trivy-report.txt
+
+  # 4. Save the reports BEFORE the gate, so GitHub can show them even if it fails.
+  - id: upload-reports
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: gcloud
+    args:
+      - storage
+      - cp
+      - /workspace/trivy-report.json
+      - /workspace/trivy-report.txt
+      - gs://${_REPORTS_BUCKET}/${_TAG}/
+
+  # 5. Gate: the same policy as the GitHub path (trivy.yaml + .trivyignore).
+  #    Fixable HIGH/CRITICAL vulnerabilities or leaked secrets stop the build.
+  - id: trivy-gate
+    name: ${_TRIVY}
+    args: [image, --input, /workspace/image.tar, --config, trivy.yaml]
+
+# Pushed only after ALL steps above succeed.
+images:
+  - ${_IMAGE}:${_TAG}
+
+options:
+  # Required when the build runs as our own service account (no default logs
+  # bucket). GitHub Actions reads the logs back from Cloud Logging.
+  logging: CLOUD_LOGGING_ONLY
+
+timeout: 1200s

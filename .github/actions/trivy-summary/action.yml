@@ -1,0 +1,49 @@
+# Composite action: turns trivy-report.json/.txt into a severity table + full
+# report on the workflow run's Summary page. Shared by both build workflows so
+# the report looks the same whichever builder ran.
+name: Publish Trivy summary
+description: Severity table and full Trivy report on the run Summary page
+inputs:
+  image:
+    description: Image reference that was scanned (for the heading)
+    required: true
+  builder:
+    description: Which builder produced the report
+    required: true
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        IMAGE_REF: ${{ inputs.image }}
+        BUILDER: ${{ inputs.builder }}
+      run: |
+        J=trivy-report.json
+        if [[ ! -f "$J" ]]; then
+          echo "No Trivy report produced (the build failed before scanning)." >> "$GITHUB_STEP_SUMMARY"
+          exit 0
+        fi
+        count()   { jq --arg s "$1" '[.Results[]?.Vulnerabilities[]? | select(.Severity==$s)] | length' "$J"; }
+        fixable() { jq --arg s "$1" '[.Results[]?.Vulnerabilities[]? | select(.Severity==$s and ((.FixedVersion // "") != ""))] | length' "$J"; }
+        secrets=$(jq '[.Results[]?.Secrets[]?] | length' "$J")
+        {
+          echo "## Trivy image scan: \`${IMAGE_REF}\`"
+          echo "Built and scanned by: **${BUILDER}**"
+          echo
+          echo "| Severity | Found | Fix available | Blocks the release? |"
+          echo "|---|---:|---:|---|"
+          for s in CRITICAL HIGH MEDIUM LOW UNKNOWN; do
+            case $s in CRITICAL|HIGH) b="yes, if a fix exists";; *) b="no (reported only)";; esac
+            echo "| $s | $(count $s) | $(fixable $s) | $b |"
+          done
+          echo "| Secrets | $secrets | n/a | yes |"
+          echo
+          echo "Policy: \`trivy.yaml\` (fixable HIGH/CRITICAL and secrets block). Accepted risks: \`.trivyignore\`."
+          echo
+          echo "<details><summary>Full Trivy report</summary>"
+          echo
+          echo '```'
+          [[ -f trivy-report.txt ]] && head -c 900000 trivy-report.txt
+          echo '```'
+          echo "</details>"
+        } >> "$GITHUB_STEP_SUMMARY"

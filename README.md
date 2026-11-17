@@ -51,7 +51,7 @@ tag pushed ─► guard ─► test ─► build ─► Trivy gate ─► push �
 |---|---|
 | **guard** | Picks the environment from the tag and checks the tag is on the right branch |
 | **test** | PHPUnit unit tests, then integration tests against MySQL |
-| **build** | Builds the image, scans it with Trivy, publishes the report, pushes only if clean |
+| **build** | **Cloud Build** builds the image, scans it with Trivy and pushes it only if clean, inside GCP. GitHub holds no push rights. The GitHub runner build is kept as a break-glass fallback |
 | **deploy** | Uploads static files, deploys the exact scanned image, checks `/healthz`, `/readyz` and `/static` through the load balancer, rolls back on failure |
 
 Release with:
@@ -119,7 +119,8 @@ IP=$(./scripts/get-service-ip.sh dev)    # or capture it
 app/          PHP app (status page, /healthz, /readyz) and PHPUnit tests
 docker/       Dockerfile + Nginx, PHP-FPM and supervisord config
 terraform/    bootstrap/ (one-time), envs/dev/, modules/ (6 reusable modules)
-.github/      release pipeline and weekly security rescan
+.github/      release pipeline, reusable build workflows (Cloud Build / GitHub), weekly rescan
+cloudbuild.yaml  the Cloud Build build -> Trivy -> push definition
 scripts/      get-service-ip.sh
 docs/         setup guide, design and security notes, images
 dr.md         disaster recovery plan
@@ -147,7 +148,7 @@ Full list: [docs/design.md](docs/design.md#problems-i-hit-and-how-i-solved-them)
 - Private IP for Cloud SQL; real domain with HTTPS and HSTS
 - Cloud Armor (WAF, rate limiting) on the load balancer
 - Monitoring: uptime check on `/readyz`, alerts on errors, latency and database load
-- Cloud Build for image builds; HCP Terraform for reviewed infrastructure changes
+- Binary Authorization: only run images built by our Cloud Build; HCP Terraform for reviewed infrastructure changes
 
 ---
 
